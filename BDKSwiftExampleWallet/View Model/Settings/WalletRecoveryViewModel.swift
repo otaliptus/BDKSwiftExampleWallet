@@ -48,17 +48,47 @@ class WalletRecoveryViewModel {
             )
             self.publicDescriptor = externalPublicDescriptor
 
-            let internalPublicDescriptor = try Descriptor.init(
-                descriptor: backupInfo.changeDescriptor,
-                network: network
-            )
-            self.publicChangeDescriptor = internalPublicDescriptor
+            if !backupInfo.changeDescriptor.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                let internalPublicDescriptor = try Descriptor.init(
+                    descriptor: backupInfo.changeDescriptor,
+                    network: network
+                )
+                self.publicChangeDescriptor = internalPublicDescriptor
+            } else {
+                self.publicChangeDescriptor = nil
+            }
 
             self.backupInfo = backupInfo
         } catch {
             self.walletRecoveryViewError = .generic(message: error.localizedDescription)
             self.showingWalletRecoveryViewErrorAlert = true
         }
+    }
+
+    var descriptorsExportText: String? {
+        guard let backupInfo, let publicDescriptor else { return nil }
+
+        let internalDescriptorsSection: String = {
+            guard
+                let publicChangeDescriptor,
+                !backupInfo.changeDescriptor.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            else {
+                return ""
+            }
+
+            return """
+
+                Internal Private: \(backupInfo.changeDescriptor)
+
+                Internal Public: \(publicChangeDescriptor)
+                """
+        }()
+
+        return """
+            External Private: \(backupInfo.descriptor)
+
+            External Public: \(publicDescriptor)\(internalDescriptorsSection)
+            """
     }
 
 }

@@ -20,7 +20,14 @@ class WalletViewModel {
     var balanceTotal: UInt64 = 0
     var canSend: Bool {
         guard let backupInfo = try? keyClient.getBackupInfo() else { return false }
-        return backupInfo.descriptor.contains("tprv") || backupInfo.descriptor.contains("xprv")
+        if !backupInfo.mnemonic.isEmpty { return true }
+        if backupInfo.descriptor.contains("tprv") || backupInfo.descriptor.contains("xprv") {
+            return true
+        }
+        return backupInfo.descriptor.range(
+            of: #"\b[5KLc9][1-9A-HJ-NP-Za-km-z]{50,51}\b"#,
+            options: .regularExpression
+        ) != nil
     }
     var inspectedScripts: UInt64 = 0
     var price: Double = 0.00

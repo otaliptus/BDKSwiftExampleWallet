@@ -9,12 +9,18 @@ import BitcoinDevKit
 import BitcoinUI
 import SwiftUI
 
+private struct ScannedWifForImport: Identifiable {
+    let value: String
+    var id: String { value }
+}
+
 struct OnboardingView: View {
     @AppStorage("isOnboarding") var isOnboarding: Bool?
     @ObservedObject var viewModel: OnboardingViewModel
     @State private var showingOnboardingViewErrorAlert = false
-    @State private var showingImportView = false
     @State private var showingScanner = false
+    @State private var scannedWifForImport: ScannedWifForImport?
+    @State private var pendingWifForImport: String?
     let pasteboard = UIPasteboard.general
     var isSmallDevice: Bool {
         UIScreen.main.isPhoneSE
@@ -218,6 +224,7 @@ struct OnboardingView: View {
                     value: animateContent
                 )
             }
+
         }
         .alert(isPresented: $showingOnboardingViewErrorAlert) {
             Alert(
@@ -228,13 +235,23 @@ struct OnboardingView: View {
                 }
             )
         }
-        .sheet(isPresented: $showingScanner) {
+        .sheet(isPresented: $showingScanner, onDismiss: {
+            if let pendingWifForImport {
+                scannedWifForImport = ScannedWifForImport(value: pendingWifForImport)
+                self.pendingWifForImport = nil
+            }
+        }) {
             CustomScannerView(
                 codeTypes: [.qr],
                 completion: { result in
                     switch result {
                     case .success(let result):
-                        viewModel.words = result.string
+                        switch viewModel.classifyScannedPayload(result.string) {
+                        case .wif(let wif):
+                            pendingWifForImport = wif
+                        case .text(let text):
+                            viewModel.words = text
+                        }
                         showingScanner = false
                     case .failure(let error):
                         viewModel.onboardingViewError = .generic(
@@ -244,6 +261,18 @@ struct OnboardingView: View {
                     }
                 },
                 pasteAction: {}
+            )
+        }
+        .sheet(item: $scannedWifForImport) { scanned in
+            WifImportView(
+                viewModel: .init(
+                    wifClient: viewModel.wifClient,
+                    wif: scanned.value,
+                    network: viewModel.selectedNetwork,
+                    esploraURL: viewModel.discoveryEsploraURL(),
+                    clientType: viewModel.selectedClientType,
+                    destinationAddressType: viewModel.selectedAddressType
+                )
             )
         }
         .onAppear {
@@ -256,6 +285,6 @@ struct OnboardingView: View {
 
 #if DEBUG
     #Preview("OnboardingView - en") {
-        OnboardingView(viewModel: .init(bdkClient: .mock))
+        OnboardingView(viewModel: .init(bdkClient: .mock, wifClient: .mock))
     }
 #endif

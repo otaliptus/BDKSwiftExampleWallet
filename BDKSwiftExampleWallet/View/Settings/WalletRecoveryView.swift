@@ -20,10 +20,7 @@ struct WalletRecoveryView: View {
                 .ignoresSafeArea()
 
             VStack {
-                if let backupInfo = viewModel.backupInfo,
-                    let publicDescriptor = viewModel.publicDescriptor,
-                    let publicChangeDescriptor = viewModel.publicChangeDescriptor
-                {
+                if let backupInfo = viewModel.backupInfo {
                     if backupInfo.mnemonic.isEmpty {
                         Text(backupInfo.descriptor)
                             .font(.system(.caption, design: .monospaced))
@@ -40,7 +37,6 @@ struct WalletRecoveryView: View {
                     }
 
                     VStack {
-                        Text("Wallet only supports BIP86.")
                         Text("Backup is not synced across devices.")
                         Text("Please make sure to write it down and store it securely.")
                     }
@@ -86,33 +82,24 @@ struct WalletRecoveryView: View {
 
                     HStack {
                         Spacer()
-
-                        let formattedDescriptors = """
-                            External Private: \(backupInfo.descriptor)
-
-                            External Public: \(publicDescriptor)
-
-                            Internal Private: \(backupInfo.changeDescriptor)
-
-                            Internal Public: \(publicChangeDescriptor)
-                            """
-
-                        ShareLink(item: formattedDescriptors) {
-                            HStack {
-                                Image(systemName: "square.and.arrow.up")
-                                Text("Descriptors")
-                                    .bold()
+                        if let descriptorsExportText = viewModel.descriptorsExportText {
+                            ShareLink(item: descriptorsExportText) {
+                                HStack {
+                                    Image(systemName: "square.and.arrow.up")
+                                    Text("Descriptors")
+                                        .bold()
+                                }
                             }
-                        }
-                        .buttonStyle(
-                            BitcoinFilled(
-                                width: 160,
-                                height: 40,
-                                tintColor: .primary,
-                                textColor: Color(uiColor: .systemBackground),
-                                isCapsule: true
+                            .buttonStyle(
+                                BitcoinFilled(
+                                    width: 160,
+                                    height: 40,
+                                    tintColor: .primary,
+                                    textColor: Color(uiColor: .systemBackground),
+                                    isCapsule: true
+                                )
                             )
-                        )
+                        }
 
                         Spacer()
                     }

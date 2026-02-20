@@ -9,11 +9,17 @@ import BitcoinDevKit
 import Foundation
 import SwiftUI
 
+enum OnboardingScannedPayload {
+    case wif(String)
+    case text(String)
+}
+
 // Can't make @Observable yet
 // https://developer.apple.com/forums/thread/731187
 // Feature or Bug?
 class OnboardingViewModel: ObservableObject {
     let bdkClient: BDKClient
+    let wifClient: WifClient
 
     @AppStorage("isOnboarding") var isOnboarding: Bool?
     @Published var createWithPersistError: CreateWithPersistError?
@@ -111,9 +117,11 @@ class OnboardingViewModel: ObservableObject {
     private var isInitializing = true
 
     init(
-        bdkClient: BDKClient = .live
+        bdkClient: BDKClient = .live,
+        wifClient: WifClient = .live
     ) {
         self.bdkClient = bdkClient
+        self.wifClient = wifClient
 
         // Set properties during initialization to avoid didSet side effects
         self.selectedNetwork = bdkClient.getNetwork()
@@ -128,7 +136,7 @@ class OnboardingViewModel: ObservableObject {
 
     func createWallet() {
         // Check if wallet already exists
-        if let existingBackup = try? bdkClient.getBackupInfo() {
+        if (try? bdkClient.getBackupInfo()) != nil {
             DispatchQueue.main.async {
                 self.isOnboarding = false
             }
@@ -169,5 +177,20 @@ class OnboardingViewModel: ObservableObject {
                 }
             }
         }
+    }
+
+    func classifyScannedPayload(_ input: String) -> OnboardingScannedPayload {
+        let cleaned = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        if wifClient.isLikelyWif(cleaned) {
+            return .wif(cleaned)
+        }
+        return .text(cleaned)
+    }
+
+    func discoveryEsploraURL() -> String {
+        if selectedClientType == .esplora, !selectedURL.isEmpty {
+            return selectedURL
+        }
+        return selectedNetwork.url
     }
 }
