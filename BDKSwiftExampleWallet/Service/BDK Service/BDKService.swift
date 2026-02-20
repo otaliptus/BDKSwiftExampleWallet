@@ -110,6 +110,7 @@ final class BDKService {
     private(set) var network: Network
     private var blockchainURL: String
     internal private(set) var wallet: Wallet?
+    private let wifImportService = WifImportService()
     private var kyotoPendingTxs: [Wtxid: Txid] = [:]
     private let kyotoPendingTxQueue = DispatchQueue(label: "bdk.service.kyoto.pending")
 
@@ -377,21 +378,29 @@ final class BDKService {
             .map { $0.split(separator: "#").first?.trimmingCharacters(in: .whitespaces) ?? "" }
             .filter { !$0.isEmpty }
         let descriptor: Descriptor
-        let changeDescriptor: Descriptor
+        let changeDescriptor: Descriptor?
         if descriptorStrings.count == 1 {
             let parsedDescriptor = try Descriptor(
                 descriptor: descriptorStrings[0],
                 network: network
             )
-            let singleDescriptors = try parsedDescriptor.toSingleDescriptors()
-            guard singleDescriptors.count >= 2 else {
-                throw WalletError.walletNotFound
+            if parsedDescriptor.isMultipath() {
+                let singleDescriptors = try parsedDescriptor.toSingleDescriptors()
+                guard singleDescriptors.count >= 2 else {
+                    throw WalletError.walletNotFound
+                }
+                descriptor = singleDescriptors[0]
+                changeDescriptor = singleDescriptors[1]
+            } else {
+                descriptor = parsedDescriptor
+                changeDescriptor = nil
             }
-            descriptor = singleDescriptors[0]
-            changeDescriptor = singleDescriptors[1]
         } else if descriptorStrings.count == 2 {
             descriptor = try Descriptor(descriptor: descriptorStrings[0], network: network)
-            changeDescriptor = try Descriptor(descriptor: descriptorStrings[1], network: network)
+            changeDescriptor = try Descriptor(
+                descriptor: descriptorStrings[1],
+                network: network
+            )
         } else {
             throw WalletError.walletNotFound
         }
@@ -399,19 +408,30 @@ final class BDKService {
         let backupInfo = BackupInfo(
             mnemonic: "",
             descriptor: descriptor.toStringWithSecret(),
-            changeDescriptor: changeDescriptor.toStringWithSecret()
+            changeDescriptor: changeDescriptor?.toStringWithSecret() ?? ""
         )
 
         try keyClient.saveBackupInfo(backupInfo)
         try keyClient.saveNetwork(self.network.description)
         try keyClient.saveEsploraURL(baseUrl)
+        self.blockchainURL = baseUrl
+        updateBlockchainClient()
 
-        let wallet = try Wallet(
-            descriptor: descriptor,
-            changeDescriptor: changeDescriptor,
-            network: network,
-            persister: persister
-        )
+        let wallet: Wallet
+        if let changeDescriptor {
+            wallet = try Wallet(
+                descriptor: descriptor,
+                changeDescriptor: changeDescriptor,
+                network: network,
+                persister: persister
+            )
+        } else {
+            wallet = try Wallet.createSingle(
+                descriptor: descriptor,
+                network: network,
+                persister: persister
+            )
+        }
         self.wallet = wallet
     }
 
@@ -513,14 +533,52 @@ final class BDKService {
         }
     }
 
+    private func loadSingleWallet(descriptor: Descriptor) throws {
+        if !FileManager.default.fileExists(atPath: URL.persistenceBackendPath) {
+            let persister = try Persister.createConnection()
+            self.persister = persister
+            let wallet = try Wallet.createSingle(
+                descriptor: descriptor,
+                network: self.network,
+                persister: persister
+            )
+            self.wallet = wallet
+        } else {
+            do {
+                let persister = try Persister.loadConnection()
+                self.persister = persister
+                let wallet = try Wallet.loadSingle(
+                    descriptor: descriptor,
+                    persister: persister
+                )
+                self.wallet = wallet
+            } catch is LoadWithPersistError {
+                try Persister.deleteConnection()
+
+                let persister = try Persister.createConnection()
+                self.persister = persister
+                let wallet = try Wallet.createSingle(
+                    descriptor: descriptor,
+                    network: self.network,
+                    persister: persister
+                )
+                self.wallet = wallet
+            }
+        }
+    }
+
     func loadWalletFromBackup() throws {
         let backupInfo = try keyClient.getBackupInfo()
         let descriptor = try Descriptor(descriptor: backupInfo.descriptor, network: self.network)
-        let changeDescriptor = try Descriptor(
-            descriptor: backupInfo.changeDescriptor,
-            network: self.network
-        )
-        try self.loadWallet(descriptor: descriptor, changeDescriptor: changeDescriptor)
+        if backupInfo.changeDescriptor.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            try self.loadSingleWallet(descriptor: descriptor)
+        } else {
+            let changeDescriptor = try Descriptor(
+                descriptor: backupInfo.changeDescriptor,
+                network: self.network
+            )
+            try self.loadWallet(descriptor: descriptor, changeDescriptor: changeDescriptor)
+        }
     }
 
     func deleteWallet() throws {
@@ -533,6 +591,8 @@ final class BDKService {
         try? keyClient.deleteNetwork()
         try? keyClient.deleteEsplora()
 
+        self.wallet = nil
+        self.persister = nil
         needsFullScan = true
         clearKyotoTrackedTransactions()
     }
@@ -697,6 +757,184 @@ final class BDKService {
         }
         let txDetails = wallet.txDetails(txid: txid)
         return txDetails
+    }
+}
+
+// MARK: - WIF Import
+
+extension BDKService {
+    func isLikelyWif(_ input: String) -> Bool {
+        wifImportService.isLikelyWif(input)
+    }
+
+    func createWallet(
+        wif: String,
+        type: WifDescriptorType,
+        network: Network,
+        esploraURL: String,
+        clientType: BlockchainClientType
+    ) throws {
+        let descriptor = try wifImportService.descriptorForImportedWallet(
+            wif: wif,
+            type: type,
+            network: network
+        )
+        try applyWifImportConfiguration(
+            network: network,
+            esploraURL: esploraURL,
+            clientType: clientType,
+            addressType: wifImportService.sweepAddressType(for: type)
+        )
+        try saveImportedSingleDescriptorWallet(
+            descriptor: descriptor,
+            network: network
+        )
+        self.needsFullScan = true
+    }
+
+    func discoverWif(
+        wif: String,
+        network: Network,
+        esploraURL: String
+    ) throws -> [WifDiscoveryResult] {
+        try wifImportService.discoverWif(
+            wif: wif,
+            network: network,
+            esploraURL: esploraURL
+        )
+    }
+
+    func sweepWifToNewWallet(
+        wif: String,
+        type: WifDescriptorType,
+        network: Network,
+        esploraURL: String,
+        clientType: BlockchainClientType,
+        destinationAddressType: AddressType,
+        feeRate: UInt64
+    ) throws -> WifSweepResult {
+        if (try? keyClient.getBackupInfo()) != nil || self.wallet != nil {
+            throw WalletError.walletAlreadyExistsForSweep
+        }
+
+        let preparedSweep = try wifImportService.prepareSweep(
+            wif: wif,
+            type: type,
+            network: network,
+            esploraURL: esploraURL
+        )
+
+        let rollbackState = WifSweepRollbackState(
+            network: self.network,
+            clientType: self.clientType,
+            blockchainURL: self.blockchainURL,
+            persistedEsploraURL: (try? keyClient.getEsploraURL()) ?? self.network.url,
+            addressType: getCurrentAddressType(),
+            needsFullScan: self.needsFullScan
+        )
+
+        do {
+            try applyWifImportConfiguration(
+                network: network,
+                esploraURL: esploraURL,
+                clientType: clientType,
+                addressType: destinationAddressType
+            )
+            try createWallet(words: nil)
+            let destinationAddress = try getAddress()
+            let txid = try wifImportService.sweepSourceWallet(
+                preparedSweep.sourceWallet,
+                destinationAddress: destinationAddress,
+                network: network,
+                esploraURL: esploraURL,
+                feeRate: feeRate
+            )
+
+            self.needsFullScan = true
+
+            return WifSweepResult(
+                destinationAddress: destinationAddress,
+                txid: txid,
+                sweptSats: preparedSweep.balanceSats
+            )
+        } catch {
+            rollbackFailedWifSweep(using: rollbackState)
+            throw error
+        }
+    }
+}
+
+private extension BDKService {
+    struct WifSweepRollbackState {
+        let network: Network
+        let clientType: BlockchainClientType
+        let blockchainURL: String
+        let persistedEsploraURL: String
+        let addressType: AddressType
+        let needsFullScan: Bool
+    }
+
+    func applyWifImportConfiguration(
+        network: Network,
+        esploraURL: String,
+        clientType: BlockchainClientType,
+        addressType: AddressType
+    ) throws {
+        self.network = network
+        try keyClient.saveNetwork(network.description)
+        self.clientType = clientType
+        try? keyClient.saveClientType(clientType)
+        try keyClient.saveAddressType(addressType.description)
+        try keyClient.saveEsploraURL(esploraURL)
+        if clientType == .kyoto {
+            self.blockchainURL = Constants.Config.Kyoto.getDefaultPeer(for: network)
+        } else {
+            self.blockchainURL = esploraURL
+        }
+        updateBlockchainClient()
+    }
+
+    func saveImportedSingleDescriptorWallet(
+        descriptor: Descriptor,
+        network: Network
+    ) throws {
+        self.persister = try Persister.createConnection()
+        guard let persister else {
+            throw WalletError.dbNotFound
+        }
+
+        let backupInfo = BackupInfo(
+            mnemonic: "",
+            descriptor: descriptor.toStringWithSecret(),
+            changeDescriptor: ""
+        )
+        try keyClient.saveBackupInfo(backupInfo)
+
+        self.wallet = try Wallet.createSingle(
+            descriptor: descriptor,
+            network: network,
+            persister: persister
+        )
+    }
+
+    func rollbackFailedWifSweep(using state: WifSweepRollbackState) {
+        try? keyClient.deleteBackupInfo()
+        try? Persister.deleteConnection()
+        self.wallet = nil
+        self.persister = nil
+        clearKyotoTrackedTransactions()
+
+        self.network = state.network
+        self.clientType = state.clientType
+        self.blockchainURL = state.blockchainURL
+        self.needsFullScan = state.needsFullScan
+
+        try? keyClient.saveNetwork(state.network.description)
+        try? keyClient.saveClientType(state.clientType)
+        try? keyClient.saveAddressType(state.addressType.description)
+        try? keyClient.saveEsploraURL(state.persistedEsploraURL)
+
+        updateBlockchainClient()
     }
 }
 
