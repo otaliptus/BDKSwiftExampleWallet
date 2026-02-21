@@ -2,7 +2,7 @@
 //  WifImportView.swift
 //  BDKSwiftExampleWallet
 //
-//  Created by Matthew Ramsden on 5/23/23.
+//  Created by otaliptus on 2/20/26.
 //
 
 import BitcoinUI

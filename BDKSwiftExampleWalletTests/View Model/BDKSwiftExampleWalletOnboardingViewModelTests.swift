@@ -2,7 +2,7 @@
 //  BDKSwiftExampleWalletOnboardingViewModelTests.swift
 //  BDKSwiftExampleWalletTests
 //
-//  Created by Matthew Ramsden on 5/22/23.
+//  Created by otaliptus on 2/20/26.
 //
 
 import XCTest
