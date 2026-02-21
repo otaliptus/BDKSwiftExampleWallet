@@ -41,6 +41,9 @@ class WalletRecoveryViewModel {
     func getBackupInfo(network: Network) {
         do {
             let backupInfo = try bdkClient.getBackupInfo()
+            let cleanChangeDescriptor = backupInfo.changeDescriptor.trimmingCharacters(
+                in: .whitespacesAndNewlines
+            )
 
             let externalPublicDescriptor = try Descriptor.init(
                 descriptor: backupInfo.descriptor,
@@ -48,9 +51,9 @@ class WalletRecoveryViewModel {
             )
             self.publicDescriptor = externalPublicDescriptor
 
-            if !backupInfo.changeDescriptor.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if !cleanChangeDescriptor.isEmpty {
                 let internalPublicDescriptor = try Descriptor.init(
-                    descriptor: backupInfo.changeDescriptor,
+                    descriptor: cleanChangeDescriptor,
                     network: network
                 )
                 self.publicChangeDescriptor = internalPublicDescriptor
@@ -67,18 +70,21 @@ class WalletRecoveryViewModel {
 
     var descriptorsExportText: String? {
         guard let backupInfo, let publicDescriptor else { return nil }
+        let cleanChangeDescriptor = backupInfo.changeDescriptor.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
 
         let internalDescriptorsSection: String = {
             guard
                 let publicChangeDescriptor,
-                !backupInfo.changeDescriptor.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                !cleanChangeDescriptor.isEmpty
             else {
                 return ""
             }
 
             return """
 
-                Internal Private: \(backupInfo.changeDescriptor)
+                Internal Private: \(cleanChangeDescriptor)
 
                 Internal Public: \(publicChangeDescriptor)
                 """

@@ -8,12 +8,19 @@ import Foundation
 
 struct WifClient {
     let isLikelyWif: (String) -> Bool
-    let discoverWif: (String, Network, String) throws -> [WifDiscoveryResult]
-    let createWalletFromWif: (String, WifDescriptorType, Network, String, BlockchainClientType) throws ->
-        Void
+    let discoverWif: (String, Network, String) async throws -> [WifDiscoveryResult]
+    let createWalletFromWif:
+        (String, WifDescriptorType, Network, String, BlockchainClientType) async throws -> Void
     let sweepWifToNewWallet:
-        (String, WifDescriptorType, Network, String, BlockchainClientType, AddressType, UInt64) throws ->
-            WifSweepResult
+        (
+            String,
+            WifDescriptorType,
+            Network,
+            String,
+            BlockchainClientType,
+            AddressType,
+            UInt64
+        ) async throws -> WifSweepResult
 }
 
 extension WifClient {
@@ -22,31 +29,37 @@ extension WifClient {
             BDKService.shared.isLikelyWif(candidate)
         },
         discoverWif: { wif, network, esploraURL in
-            try BDKService.shared.discoverWif(
-                wif: wif,
-                network: network,
-                esploraURL: esploraURL
-            )
+            try await Self.runBlocking {
+                try BDKService.shared.discoverWif(
+                    wif: wif,
+                    network: network,
+                    esploraURL: esploraURL
+                )
+            }
         },
         createWalletFromWif: { wif, type, network, esploraURL, clientType in
-            try BDKService.shared.createWallet(
-                wif: wif,
-                type: type,
-                network: network,
-                esploraURL: esploraURL,
-                clientType: clientType
-            )
+            try await Self.runBlocking {
+                try BDKService.shared.createWallet(
+                    wif: wif,
+                    type: type,
+                    network: network,
+                    esploraURL: esploraURL,
+                    clientType: clientType
+                )
+            }
         },
         sweepWifToNewWallet: { wif, type, network, esploraURL, clientType, destinationAddressType, feeRate in
-            try BDKService.shared.sweepWifToNewWallet(
-                wif: wif,
-                type: type,
-                network: network,
-                esploraURL: esploraURL,
-                clientType: clientType,
-                destinationAddressType: destinationAddressType,
-                feeRate: feeRate
-            )
+            try await Self.runBlocking {
+                try BDKService.shared.sweepWifToNewWallet(
+                    wif: wif,
+                    type: type,
+                    network: network,
+                    esploraURL: esploraURL,
+                    clientType: clientType,
+                    destinationAddressType: destinationAddressType,
+                    feeRate: feeRate
+                )
+            }
         }
     )
 }
@@ -75,3 +88,17 @@ extension WifClient {
         )
     }
 #endif
+
+private extension WifClient {
+    static func runBlocking<T>(_ work: @escaping () throws -> T) async throws -> T {
+        try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                do {
+                    continuation.resume(returning: try work())
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+}

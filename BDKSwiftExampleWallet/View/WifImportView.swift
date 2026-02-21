@@ -167,6 +167,9 @@ struct WifImportView: View {
             }
             viewModel.fetchFees()
         }
+        .onDisappear {
+            viewModel.cancelDiscovery()
+        }
         .alert(isPresented: $viewModel.showingErrorAlert) {
             Alert(
                 title: Text("Import Error"),

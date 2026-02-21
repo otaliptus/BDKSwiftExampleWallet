@@ -27,6 +27,7 @@ class WifImportViewModel: ObservableObject {
     @Published var recommendedFees: RecommendedFees?
     @Published var onboardingViewError: AppError?
     @Published var showingErrorAlert = false
+    private var discoveryTask: Task<Void, Never>?
 
     var selectedResult: WifDiscoveryResult? {
         guard let selectedType else { return nil }
@@ -58,57 +59,49 @@ class WifImportViewModel: ObservableObject {
     func discover() {
         guard !isDiscovering else { return }
         isDiscovering = true
-
-        let wifClient = self.wifClient
-        let wif = self.wif
-        let network = self.network
-        let esploraURL = self.esploraURL
-
-        Task {
-            defer { isDiscovering = false }
+        discoveryTask = Task {
+            defer {
+                isDiscovering = false
+                discoveryTask = nil
+            }
             do {
-                let results = try await runBlocking {
-                    try wifClient.discoverWif(wif, network, esploraURL)
-                }
+                let results = try await wifClient.discoverWif(wif, network, esploraURL)
+                guard !Task.isCancelled else { return }
                 discoveryResults = results
                 selectedType =
                     results.first(where: { $0.isSupported && $0.hasFunds })?.type
                     ?? results.first(where: { $0.isSupported })?.type
+            } catch is CancellationError {
             } catch {
-                onboardingViewError = .generic(message: error.localizedDescription)
-                showingErrorAlert = true
+                presentError(error)
             }
         }
+    }
+
+    func cancelDiscovery() {
+        discoveryTask?.cancel()
+        discoveryTask = nil
+        isDiscovering = false
     }
 
     func importSelectedType() {
         guard let selectedType else { return }
         guard !isProcessing else { return }
         isProcessing = true
-
-        let wifClient = self.wifClient
-        let wif = self.wif
-        let network = self.network
-        let esploraURL = self.esploraURL
-        let clientType = self.clientType
-
         Task {
             defer { isProcessing = false }
             do {
-                try await runBlocking {
-                    try wifClient.createWalletFromWif(
-                        wif,
-                        selectedType,
-                        network,
-                        esploraURL,
-                        clientType
-                    )
-                }
+                try await wifClient.createWalletFromWif(
+                    wif,
+                    selectedType,
+                    network,
+                    esploraURL,
+                    clientType
+                )
                 isOnboarding = false
                 NotificationCenter.default.post(name: .walletCreated, object: nil)
             } catch {
-                onboardingViewError = .generic(message: error.localizedDescription)
-                showingErrorAlert = true
+                presentError(error)
             }
         }
     }
@@ -119,8 +112,7 @@ class WifImportViewModel: ObservableObject {
             do {
                 recommendedFees = try await feeClient.fetchFees()
             } catch {
-                onboardingViewError = .generic(message: error.localizedDescription)
-                showingErrorAlert = true
+                presentError(error)
             }
         }
     }
@@ -129,47 +121,28 @@ class WifImportViewModel: ObservableObject {
         guard let selectedType else { return }
         guard !isProcessing else { return }
         isProcessing = true
-
-        let wifClient = self.wifClient
-        let wif = self.wif
-        let network = self.network
-        let esploraURL = self.esploraURL
-        let clientType = self.clientType
-        let destinationAddressType = self.destinationAddressType
-        let feeRate = UInt64(recommendedFees?.hourFee ?? 2)
-
         Task {
             defer { isProcessing = false }
             do {
-                _ = try await runBlocking {
-                    try wifClient.sweepWifToNewWallet(
-                        wif,
-                        selectedType,
-                        network,
-                        esploraURL,
-                        clientType,
-                        destinationAddressType,
-                        feeRate
-                    )
-                }
+                _ = try await wifClient.sweepWifToNewWallet(
+                    wif,
+                    selectedType,
+                    network,
+                    esploraURL,
+                    clientType,
+                    destinationAddressType,
+                    UInt64(recommendedFees?.hourFee ?? 2)
+                )
                 isOnboarding = false
                 NotificationCenter.default.post(name: .walletCreated, object: nil)
             } catch {
-                onboardingViewError = .generic(message: error.localizedDescription)
-                showingErrorAlert = true
+                presentError(error)
             }
         }
     }
 
-    private func runBlocking<T>(_ work: @escaping () throws -> T) async throws -> T {
-        try await withCheckedThrowingContinuation { continuation in
-            DispatchQueue.global(qos: .userInitiated).async {
-                do {
-                    continuation.resume(returning: try work())
-                } catch {
-                    continuation.resume(throwing: error)
-                }
-            }
-        }
+    private func presentError(_ error: Error) {
+        onboardingViewError = .generic(message: error.localizedDescription)
+        showingErrorAlert = true
     }
 }
